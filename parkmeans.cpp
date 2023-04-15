@@ -137,20 +137,6 @@ int assignToCluster(std::array<double, CLUSTER_COUNT>& centroids, uint8_t myNumb
 }
 
 /**
- * @brief Gathers assignments of numbers to a cluster
- *
- * @param assignments Vector of 0 and 1, 0 if number does not belong to this cluster, 1 otherwise
- * @param cluster Cluster for which results should be gathered
- */
-void distributeResults(ByteVector& assignments, int cluster)
-{
-    for (int i = 0; i < CLUSTER_COUNT; i++) {
-        auto toSend = static_cast<uint8_t>(cluster == i);
-        MPI_Gather(&toSend, 1, MPI_UINT8_T, assignments.data(), 1, MPI_UINT8_T, i, MPI_COMM_WORLD);
-    }
-}
-
-/**
  * @brief Recalculate centroids
  *
  * @param centroids Reference to old centroids
