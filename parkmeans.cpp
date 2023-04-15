@@ -1,3 +1,10 @@
+/**
+ * @file parkmeans.cpp
+ * @author Samuel Repka (xrepka07@stud.fit.vutbr.cz)
+ * @brief PRL project 2
+ * @date 2023-04-15
+ */
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -70,17 +77,26 @@ ByteVector loadNumbers(const char* path)
     // read loads chars, I want unsigned chars so I do a quick conversion here
     memcpy(numbers.data(), numbersSigned.data(), length);
 
-    for (auto num : numbers) {
-        std::cout << +num << "\n";
-    }
-
     return numbers;
 }
 
-
+/**
+ * @brief Check if the process should calculate centroid or not
+ *
+ * @param rank Rank of the process
+ * @return true Process should not calculate centroid
+ * @return false Otherwise
+ */
 inline bool calculatesCentroid(const int rank) { return rank >= 0 && rank < CLUSTER_COUNT; }
 
 
+/**
+ * @brief Load numbers. Numbers will be trimmed to commSize if too large,
+ *        or the program will be terminated, if number of numbers is insufficient
+ *
+ * @param dst Destination vector
+ * @param commSize Number of processes available.
+ */
 void loadNumbersChecked(ByteVector& dst, int commSize)
 {
     // load numbers
@@ -95,6 +111,13 @@ void loadNumbersChecked(ByteVector& dst, int commSize)
     }
 }
 
+/**
+ * @brief Calculate to which cluster myNumber belongs
+ *
+ * @param centroids Centroids
+ * @param myNumber Number for which to find a centroid
+ * @return int Index of the result centroid
+ */
 int assignToCluster(std::array<double, CLUSTER_COUNT>& centroids, uint8_t myNumber)
 {
     // assign to clusters
@@ -123,6 +146,12 @@ int assignToCluster(std::array<double, CLUSTER_COUNT>& centroids, uint8_t myNumb
     return cluster;
 }
 
+/**
+ * @brief Gathers assignments of numbers to a cluster
+ *
+ * @param assignments Vector of 0 and 1, 0 if number does not belong to this cluster, 1 otherwise
+ * @param cluster Cluster for which results should be gathered
+ */
 void distributeResults(ByteVector& assignments, int cluster)
 {
     for (int i = 0; i < CLUSTER_COUNT; i++) {
@@ -131,8 +160,15 @@ void distributeResults(ByteVector& assignments, int cluster)
     }
 }
 
-
-void recalculateCentroids(
+/**
+ * @brief Recalculate centroid belonging to this process (if applicable) according to new assignments
+ *
+ * @param rank Process rank
+ * @param numbers Input numbers
+ * @param centroids Reference to old centroids
+ * @param assignments New centroid assignments
+ */
+void recalculateCentroid(
     int rank,
     ByteVector& numbers,
     std::array<double, CLUSTER_COUNT>& centroids,
@@ -156,7 +192,14 @@ void recalculateCentroids(
     }
 }
 
-
+/**
+ * @brief Function implementing kmeans calculation
+ *
+ * @param centroids Initialized centroids (result will be there)
+ * @param numbers Input numbers
+ * @param myNumber Number for this process
+ * @return int Cluster to which myNumber was assigned
+ */
 int kmeansLoop(std::array<double, CLUSTER_COUNT>& centroids, ByteVector& numbers, uint8_t myNumber)
 {
     // acquire data about the processes
@@ -176,7 +219,7 @@ int kmeansLoop(std::array<double, CLUSTER_COUNT>& centroids, ByteVector& numbers
 
         // calculate new centroids
         auto oldCentroids = centroids;
-        recalculateCentroids(rank, numbers, centroids, assignments);
+        recalculateCentroid(rank, numbers, centroids, assignments);
 
         // distribute new centroids
         for (int i = 0; i < CLUSTER_COUNT; i++) {
@@ -192,7 +235,13 @@ int kmeansLoop(std::array<double, CLUSTER_COUNT>& centroids, ByteVector& numbers
     return cluster;
 }
 
-
+/**
+ * @brief Print final results to the console
+ *
+ * @param centroids Calculated centroids
+ * @param finalAssignment Vector of numbers representing to which centroid number belongs
+ * @param numbers Input numbers
+ */
 void printResults(
     std::array<double, CLUSTER_COUNT>& centroids,
     std::vector<int>& finalAssignment,
@@ -239,6 +288,7 @@ int main(int argc, char** argv)
         std::copy(numbers.begin(), numbers.begin() + CLUSTER_COUNT, centroids.begin());
     }
 
+    // distribute numbers to processes that will calculate centroids
     if (rank == ROOT) {
         for (int i = 1; i < CLUSTER_COUNT; i++) {
             MPI_Send(numbers.data(), commSize, MPI_UINT8_T, i, 0, MPI::COMM_WORLD);
@@ -248,12 +298,14 @@ int main(int argc, char** argv)
         MPI_Recv(numbers.data(), commSize, MPI_UINT8_T, ROOT, 0, MPI::COMM_WORLD, MPI_STATUS_IGNORE);
     }
 
-
+    // broadcast centroids and assign numbers to processes
     MPI_Bcast(centroids.data(), centroids.size(), MPI_DOUBLE, ROOT, MPI::COMM_WORLD);
     MPI_Scatter(numbers.data(), 1, MPI_UINT8_T, &myNumber, 1, MPI_UINT8_T, ROOT, MPI::COMM_WORLD);
 
+    // calculate final cluster for assigned number
     int cluster = kmeansLoop(centroids, numbers, myNumber);
 
+    // gather results
     std::vector<int> finalAssignment(numbers.size(), 0);
     MPI_Gather(&cluster, 1, MPI_INT, finalAssignment.data(), 1, MPI_INT, ROOT, MPI::COMM_WORLD);
 
