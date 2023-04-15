@@ -81,16 +81,6 @@ ByteVector loadNumbers(const char* path)
 }
 
 /**
- * @brief Check if the process should calculate centroid or not
- *
- * @param rank Rank of the process
- * @return true Process should not calculate centroid
- * @return false Otherwise
- */
-inline bool calculatesCentroid(const int rank) { return rank >= 0 && rank < CLUSTER_COUNT; }
-
-
-/**
  * @brief Load numbers. Numbers will be trimmed to commSize if too large,
  *        or the program will be terminated, if number of numbers is insufficient
  *
@@ -156,40 +146,33 @@ void distributeResults(ByteVector& assignments, int cluster)
 {
     for (int i = 0; i < CLUSTER_COUNT; i++) {
         auto toSend = static_cast<uint8_t>(cluster == i);
-        MPI_Gather(&toSend, 1, MPI_UINT8_T, assignments.data(), 1, MPI_UINT8_T, i, MPI::COMM_WORLD);
+        MPI_Gather(&toSend, 1, MPI_UINT8_T, assignments.data(), 1, MPI_UINT8_T, i, MPI_COMM_WORLD);
     }
 }
 
 /**
- * @brief Recalculate centroid belonging to this process (if applicable) according to new assignments
+ * @brief Recalculate centroids
  *
- * @param rank Process rank
- * @param numbers Input numbers
  * @param centroids Reference to old centroids
- * @param assignments New centroid assignments
+ * @param myNumber Number belonging to this process
+ * @param cluster Cluster to which muNumber belongs
  */
-void recalculateCentroid(
-    int rank,
-    ByteVector& numbers,
-    std::array<double, CLUSTER_COUNT>& centroids,
-    ByteVector& assignments
-)
+void recalculateCentroids(std::array<double, CLUSTER_COUNT>& centroids, int myNumber, int cluster)
 {
-    if (calculatesCentroid(rank)) {
-        double sum = 0.;
-        int count  = 0;
-        for (int i = 0; i < assignments.size(); i++) {
+    std::array<int, 2> sumAndCount {};
+    for (int i = 0; i < CLUSTER_COUNT; i++) {
+        int val      = cluster == i ? myNumber : 0;
+        auto counted = static_cast<uint8_t>(cluster == i);
+        std::array<int, 2> toSend { val, counted };
 
-            if (assignments[i] == 1) {
-                sum += numbers[i];
-                count++;
-            }
-        }
+        MPI_Reduce(&toSend, &sumAndCount, 2, MPI_INT, MPI_SUM, ROOT, MPI_COMM_WORLD);
 
-        if (count != 0) {
-            centroids[rank] = sum / count;
-        }
+        int sum      = sumAndCount[0];
+        int count    = sumAndCount[1];
+        centroids[i] = static_cast<double>(sum) / count;
     }
+
+    MPI_Bcast(centroids.data(), CLUSTER_COUNT, MPI_DOUBLE, ROOT, MPI_COMM_WORLD);
 }
 
 /**
@@ -200,7 +183,7 @@ void recalculateCentroid(
  * @param myNumber Number for this process
  * @return int Cluster to which myNumber was assigned
  */
-int kmeansLoop(std::array<double, CLUSTER_COUNT>& centroids, ByteVector& numbers, uint8_t myNumber)
+int kmeansLoop(std::array<double, CLUSTER_COUNT>& centroids, uint8_t myNumber)
 {
     // acquire data about the processes
     int commSize = 0;
@@ -212,19 +195,11 @@ int kmeansLoop(std::array<double, CLUSTER_COUNT>& centroids, ByteVector& numbers
 
     while (true) {
         // number of processors should be the same as input count
-        std::vector<uint8_t> assignments(commSize, 0);
         cluster = assignToCluster(centroids, myNumber);
-
-        distributeResults(assignments, cluster);
 
         // calculate new centroids
         auto oldCentroids = centroids;
-        recalculateCentroid(rank, numbers, centroids, assignments);
-
-        // distribute new centroids
-        for (int i = 0; i < CLUSTER_COUNT; i++) {
-            MPI_Bcast(centroids.data() + i, 1, MPI_DOUBLE, i, MPI::COMM_WORLD);
-        }
+        recalculateCentroids(centroids, myNumber, cluster);
 
         // end if fixed point was reached
         if (centroids == oldCentroids) {
@@ -288,26 +263,16 @@ int main(int argc, char** argv)
         std::copy(numbers.begin(), numbers.begin() + CLUSTER_COUNT, centroids.begin());
     }
 
-    // distribute numbers to processes that will calculate centroids
-    if (rank == ROOT) {
-        for (int i = 1; i < CLUSTER_COUNT; i++) {
-            MPI_Send(numbers.data(), commSize, MPI_UINT8_T, i, 0, MPI::COMM_WORLD);
-        }
-    } else if (calculatesCentroid(rank)) {
-        numbers.resize(commSize);
-        MPI_Recv(numbers.data(), commSize, MPI_UINT8_T, ROOT, 0, MPI::COMM_WORLD, MPI_STATUS_IGNORE);
-    }
-
     // broadcast centroids and assign numbers to processes
-    MPI_Bcast(centroids.data(), centroids.size(), MPI_DOUBLE, ROOT, MPI::COMM_WORLD);
-    MPI_Scatter(numbers.data(), 1, MPI_UINT8_T, &myNumber, 1, MPI_UINT8_T, ROOT, MPI::COMM_WORLD);
+    MPI_Bcast(centroids.data(), centroids.size(), MPI_DOUBLE, ROOT, MPI_COMM_WORLD);
+    MPI_Scatter(numbers.data(), 1, MPI_UINT8_T, &myNumber, 1, MPI_UINT8_T, ROOT, MPI_COMM_WORLD);
 
     // calculate final cluster for assigned number
-    int cluster = kmeansLoop(centroids, numbers, myNumber);
+    int cluster = kmeansLoop(centroids, myNumber);
 
     // gather results
     std::vector<int> finalAssignment(numbers.size(), 0);
-    MPI_Gather(&cluster, 1, MPI_INT, finalAssignment.data(), 1, MPI_INT, ROOT, MPI::COMM_WORLD);
+    MPI_Gather(&cluster, 1, MPI_INT, finalAssignment.data(), 1, MPI_INT, ROOT, MPI_COMM_WORLD);
 
     if (rank == ROOT) {
         printResults(centroids, finalAssignment, numbers);
