@@ -1,0 +1,14 @@
+{
+    BasedOnStyle: WebKit,
+    IndentWidth: 4,
+    ColumnLimit: 110,
+    MaxEmptyLinesToKeep: 2,
+    AlignConsecutiveAssignments: true,
+    AlignConsecutiveMacros: true,
+    BinPackArguments: false,
+    BinPackParameters: false,
+    AllowAllParametersOfDeclarationOnNextLine: false,
+    AlignAfterOpenBracket: BlockIndent,
+    IndentCaseLabels: true,
+    
+}
